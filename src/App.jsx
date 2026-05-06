@@ -253,10 +253,11 @@ export default function App() {
 
   // Play audio URL with Android Chrome workaround
   const playAudio = useCallback(async (url) => {
-    // Try direct Audio element first (works on desktop)
+    // Method 1: Create a fresh audio element each time, play immediately on click
     const audio = new Audio(url)
     audio.setAttribute('playsinline', '')
     audio.setAttribute('webkit-playsinline', '')
+    audio.preload = 'auto'
     
     try {
       await audio.play()
@@ -265,21 +266,37 @@ export default function App() {
       if (e.name !== 'NotAllowedError') throw e
     }
     
-    // Android Chrome workaround: use AudioContext to unlock
-    const ctx = await ensureAudio()
-    // Create a silent buffer to "consume" the user gesture
-    const buffer = ctx.createBuffer(1, 1, 22050)
-    const source = ctx.createBufferSource()
-    source.buffer = buffer
-    source.connect(ctx.destination)
-    source.start(0)
+    // Method 2: AudioContext unlock trick
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      await ctx.resume()
+      
+      // Fetch audio as blob and play with AudioContext
+      const resp = await fetch(url)
+      const blob = await resp.blob()
+      const buf = await blob.arrayBuffer()
+      const audioBuf = await ctx.decodeAudioData(buf)
+      
+      const source = ctx.createBufferSource()
+      source.buffer = audioBuf
+      source.connect(ctx.destination)
+      source.start(0)
+      return
+    } catch (e2) {
+      console.log('AudioContext playback failed:', e2)
+    }
     
-    // Now try playing again
-    const audio2 = new Audio(url)
-    audio2.setAttribute('playsinline', '')
-    audio2.setAttribute('webkit-playsinline', '')
-    await audio2.play()
-  }, [ensureAudio])
+    // Method 3: Use an iframe to bypass restrictions
+    try {
+      const iframe = document.createElement('iframe')
+      iframe.style.display = 'none'
+      iframe.src = url
+      document.body.appendChild(iframe)
+      setTimeout(() => document.body.removeChild(iframe), 5000)
+    } catch (e3) {
+      throw new Error('All playback methods failed')
+    }
+  }, [])
 
   // TTS speak — browser-native Edge TTS via WebSocket (no server needed!)
   // Uses Microsoft Edge's free TTS service directly from the browser
@@ -380,13 +397,29 @@ export default function App() {
                 }
                 const blob = new Blob([combined], { type: 'audio/mpeg' })
                 const url = URL.createObjectURL(blob)
-                playAudio(url).then(() => {
-                  URL.revokeObjectURL(url)
-                  resolve()
-                }).catch(() => {
-                  URL.revokeObjectURL(url)
-                  reject(new Error('Audio playback failed'))
-                })
+                // Play with AudioContext for best Android Chrome compatibility
+                const ctx = new (window.AudioContext || window.webkitAudioContext)()
+                ctx.resume().then(() => {
+                  const reader = new FileReader()
+                  reader.onload = () => {
+                    ctx.decodeAudioData(reader.result).then(audioBuf => {
+                      const source = ctx.createBufferSource()
+                      source.buffer = audioBuf
+                      source.connect(ctx.destination)
+                      source.start(0)
+                      source.onended = () => {
+                        URL.revokeObjectURL(url)
+                        ctx.close()
+                        resolve()
+                      }
+                    }).catch(() => {
+                      // Fallback to audio element
+                      new Audio(url).play().then(resolve).catch(reject)
+                      URL.revokeObjectURL(url)
+                    })
+                  }
+                  reader.readAsArrayBuffer(blob)
+                }).catch(reject)
               } else {
                 reject(new Error('No audio data received'))
               }
