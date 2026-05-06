@@ -236,20 +236,19 @@ export default function App() {
     checkTTS()
   }, [])
 
-  // TTS speak — use Google TTS (Cantonese supported, needs Chrome)
+  // TTS speak — browser-native Edge TTS via WebSocket (no server needed!)
+  // Uses Microsoft Edge's free TTS service directly from the browser
   const speak = async (text) => {
-    // Try Google TTS (best Cantonese, works in Chrome)
+    // Try Edge TTS via browser WebSocket (works on mobile Chrome, 
+    // uses Microsoft's free service, no API key needed)
     try {
-      const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=yue&client=tw-ob&ttsspeed=0.9`
-      const audio = new Audio(url)
-      audio.volume = 1.0
-      await audio.play()
+      await playEdgeTTS(text)
       return
     } catch (e) {
-      console.log('Google TTS failed, trying fallback...')
+      console.log('Edge TTS WebSocket failed, trying alternatives...', e)
     }
     
-    // Fallback: Try local TTS server
+    // Fallback: local TTS server
     try {
       const url = `http://${window.location.hostname}:9876/tts?text=${encodeURIComponent(text)}`
       const audio = new Audio(url)
@@ -257,7 +256,15 @@ export default function App() {
       return
     } catch (e) {}
     
-    // Last resort: Browser TTS
+    // Last resort: Google TTS
+    try {
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=yue&client=tw-ob&ttsspeed=0.9`
+      const audio = new Audio(url)
+      await audio.play()
+      return
+    } catch (e) {}
+    
+    // Absolute last resort: browser native TTS
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel()
       const u = new SpeechSynthesisUtterance(text)
@@ -265,6 +272,108 @@ export default function App() {
       u.rate = 0.85
       window.speechSynthesis.speak(u)
     }
+  }
+
+  // Edge TTS browser-native implementation
+  // Connects directly to Microsoft's Edge TTS WebSocket
+  function playEdgeTTS(text) {
+    return new Promise((resolve, reject) => {
+      try {
+        const token = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
+        const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${token}&ConnectionId=${crypto.randomUUID().replace(/-/g, '')}`
+        
+        const ws = new WebSocket(wsUrl)
+        const audioChunks = []
+        
+        ws.onopen = () => {
+          // Send speech config
+          const config = JSON.stringify({
+            context: {
+              synthesis: {
+                audio: {
+                  metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
+                  outputFormat: 'audio-24khz-48kbitrate-mono-mp3'
+                }
+              }
+            }
+          })
+          ws.send(`X-Timestamp:${new Date().toISOString()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${config}`)
+          
+          // Send SSML
+          const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-HK'><voice name='zh-HK-HiuMaanNeural'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>${escapeXml(text)}</prosody></voice></speak>`
+          ws.send(`X-RequestId:${crypto.randomUUID().replace(/-/g, '')}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${new Date().toISOString()}Z\r\nPath:ssml\r\n\r\n${ssml}`)
+        }
+        
+        ws.onmessage = (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            // Binary audio data
+            const data = new Uint8Array(event.data)
+            const separator = 'Path:audio\r\n'
+            const sepBytes = new TextEncoder().encode(separator)
+            
+            // Find separator in binary data
+            let idx = -1
+            for (let i = 0; i < data.length - sepBytes.length; i++) {
+              let match = true
+              for (let j = 0; j < sepBytes.length; j++) {
+                if (data[i + j] !== sepBytes[j]) { match = false; break }
+              }
+              if (match) { idx = i + sepBytes.length; break }
+            }
+            
+            if (idx >= 0) {
+              audioChunks.push(data.slice(idx))
+            }
+          } else if (typeof event.data === 'string') {
+            if (event.data.includes('turn.end')) {
+              ws.close()
+              // Play the audio
+              if (audioChunks.length > 0) {
+                const totalLen = audioChunks.reduce((s, c) => s + c.length, 0)
+                const combined = new Uint8Array(totalLen)
+                let offset = 0
+                for (const chunk of audioChunks) {
+                  combined.set(chunk, offset)
+                  offset += chunk.length
+                }
+                const blob = new Blob([combined], { type: 'audio/mpeg' })
+                const url = URL.createObjectURL(blob)
+                const audio = new Audio(url)
+                audio.onended = () => { URL.revokeObjectURL(url); resolve() }
+                audio.onerror = () => reject(new Error('Audio playback failed'))
+                audio.play().catch(reject)
+              } else {
+                reject(new Error('No audio data received'))
+              }
+            }
+          }
+        }
+        
+        ws.onerror = (e) => {
+          reject(new Error('WebSocket connection failed'))
+        }
+        
+        ws.onclose = (e) => {
+          if (audioChunks.length === 0 && e.code !== 1000) {
+            reject(new Error(`WebSocket closed: ${e.code}`))
+          }
+        }
+        
+        // Timeout after 10s
+        setTimeout(() => {
+          if (audioChunks.length === 0) {
+            ws.close()
+            reject(new Error('Edge TTS timeout'))
+          }
+        }, 10000)
+      } catch (e) {
+        reject(e)
+      }
+    })
+  }
+
+  function escapeXml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
   }
 
   // Change level
