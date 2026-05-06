@@ -236,23 +236,21 @@ export default function App() {
     checkTTS()
   }, [])
 
-  // TTS speak
+  // TTS speak — use Google TTS API for reliable Cantonese support
   const speak = (text) => {
-    if (!ttsState.supported) {
-      alert('抱歉，此瀏覽器唔支援語音功能 😅')
-      return
-    }
-    window.speechSynthesis.cancel()
-    const u = new SpeechSynthesisUtterance(text)
-    u.lang = ttsLang
-    u.rate = 0.85
-    // Try to find matching voice
-    const voices = speechSynthesis.getVoices()
-    const yueVoice = voices.find(v => v.lang.startsWith('yue') || v.lang.includes('HK'))
-    const zhVoice = voices.find(v => v.lang.startsWith('zh'))
-    if (yueVoice) u.voice = yueVoice
-    else if (zhVoice) u.voice = zhVoice
-    window.speechSynthesis.speak(u)
+    // Encode and create audio URL via Google TTS
+    const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=yue&client=tw-ob&ttsspeed=0.9`
+    const audio = new Audio(url)
+    audio.play().catch(e => {
+      // Fallback to browser TTS if Google fails
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+        const u = new SpeechSynthesisUtterance(text)
+        u.lang = ttsState.yue ? 'yue-HK' : 'zh-CN'
+        u.rate = 0.85
+        window.speechSynthesis.speak(u)
+      }
+    })
   }
 
   // Change level
