@@ -236,21 +236,35 @@ export default function App() {
     checkTTS()
   }, [])
 
-  // TTS speak — use Google TTS API for reliable Cantonese support
-  const speak = (text) => {
-    // Encode and create audio URL via Google TTS
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=yue&client=tw-ob&ttsspeed=0.9`
-    const audio = new Audio(url)
-    audio.play().catch(e => {
-      // Fallback to browser TTS if Google fails
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel()
-        const u = new SpeechSynthesisUtterance(text)
-        u.lang = ttsState.yue ? 'yue-HK' : 'zh-CN'
-        u.rate = 0.85
-        window.speechSynthesis.speak(u)
-      }
-    })
+  // TTS speak — use local Edge TTS server (best Cantonese, works in China)
+  const speak = async (text) => {
+    // Try local TTS server first
+    try {
+      const url = `http://${window.location.hostname}:9876/tts?text=${encodeURIComponent(text)}`
+      const audio = new Audio(url)
+      audio.volume = 1.0
+      await audio.play()
+      return
+    } catch (e) {
+      console.log('Local TTS server not available, trying alternatives...')
+    }
+    
+    // Fallback 1: Google TTS (Cantonese)
+    try {
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=yue&client=tw-ob&ttsspeed=0.9`
+      const audio = new Audio(url)
+      await audio.play()
+      return
+    } catch (e) {}
+    
+    // Fallback 2: Browser TTS
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+      const u = new SpeechSynthesisUtterance(text)
+      u.lang = 'yue-HK'
+      u.rate = 0.85
+      window.speechSynthesis.speak(u)
+    }
   }
 
   // Change level
@@ -594,10 +608,26 @@ export default function App() {
               </div>
               {!ttsState.yue && ttsState.supported && (
                 <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px', lineHeight: 1.5 }}>
-                  💡 Android可以去設定 → 輔助功能 → 文字轉語音 → 安裝粵語語音<br />
-                  或喺 Google Play 搜尋「Google 文字轉語音」安裝粵語語言包
+                  💡 美依推薦：用手機連接電腦嘅TTS服務器<br />
+                  效果最好！詳見下方說明
                 </div>
               )}
+            </div>
+
+            <div className="setting-group">
+              <h3>TTS 服務器連接</h3>
+              <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
+                <label style={{ fontSize: '13px', lineHeight: 1.6 }}>
+                  粵讀使用 Edge TTS 提供地道粵語發音。<br />
+                  美依已喺電腦上啟動咗 TTS 服務器 🎤<br /><br />
+                  <strong>手機連接步驟：</strong><br />
+                  ① 確保手機連到同一個Wi-Fi<br />
+                  ② 喺電腦終端輸入 <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: '4px', fontSize: '12px' }}>hostname -I</code> 查IP<br />
+                  ③ TTS 會自動連接 <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: '4px', fontSize: '12px' }}>埠 9876</code><br /><br />
+                  ⚠️ 如果唔想用服務器，美依仲準備咗<br />
+                  Google TTS 後備方案（但可能係普通話）
+                </label>
+              </div>
             </div>
 
             <div className="setting-group">
