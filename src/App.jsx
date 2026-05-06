@@ -198,15 +198,61 @@ export default function App() {
     setStarredCards(starred)
   }
 
+  // TTS state
+  const [ttsState, setTtsState] = useState({ supported: false, yue: false, zh: false, voices: 0 })
+  const [ttsLang, setTtsLang] = useState('yue-HK')
+
+  // Check TTS support
+  useEffect(() => {
+    const checkTTS = () => {
+      const supported = 'speechSynthesis' in window
+      if (!supported) {
+        setTtsState({ supported: false, yue: false, zh: false, voices: 0 })
+        return
+      }
+      
+      const check = () => {
+        const voices = speechSynthesis.getVoices()
+        const hasYue = voices.some(v => v.lang.startsWith('yue') || v.lang.includes('HK'))
+        const hasZh = voices.some(v => v.lang.startsWith('zh'))
+        setTtsState({ supported: true, yue: hasYue, zh: hasZh, voices: voices.length })
+        
+        // Auto-detect best language
+        if (hasYue) setTtsLang('yue-HK')
+        else if (hasZh) setTtsLang('zh-HK')
+        else setTtsLang('yue-HK')
+      }
+      
+      // Voices might load async
+      if (speechSynthesis.getVoices().length === 0) {
+        speechSynthesis.addEventListener('voiceschanged', check, { once: true })
+        // Fallback timeout
+        setTimeout(check, 1000)
+      } else {
+        check()
+      }
+    }
+    
+    checkTTS()
+  }, [])
+
   // TTS speak
   const speak = (text) => {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel()
-      const u = new SpeechSynthesisUtterance(text)
-      u.lang = 'yue-HK'
-      u.rate = 0.85
-      window.speechSynthesis.speak(u)
+    if (!ttsState.supported) {
+      alert('抱歉，此瀏覽器唔支援語音功能 😅')
+      return
     }
+    window.speechSynthesis.cancel()
+    const u = new SpeechSynthesisUtterance(text)
+    u.lang = ttsLang
+    u.rate = 0.85
+    // Try to find matching voice
+    const voices = speechSynthesis.getVoices()
+    const yueVoice = voices.find(v => v.lang.startsWith('yue') || v.lang.includes('HK'))
+    const zhVoice = voices.find(v => v.lang.startsWith('zh'))
+    if (yueVoice) u.voice = yueVoice
+    else if (zhVoice) u.voice = zhVoice
+    window.speechSynthesis.speak(u)
   }
 
   // Change level
@@ -520,6 +566,40 @@ export default function App() {
                 <label>生詞本</label>
                 <span className="value">{starredCards.length} 個</span>
               </div>
+            </div>
+
+            <div className="setting-group">
+              <h3>語音狀態</h3>
+              <div className="setting-row">
+                <label>瀏覽器TTS</label>
+                <span className="value" style={{ color: ttsState.supported ? 'var(--success)' : 'var(--primary)' }}>
+                  {ttsState.supported ? '✅ 支援' : '❌ 唔支援'}
+                </span>
+              </div>
+              <div className="setting-row">
+                <label>粵語語音</label>
+                <span className="value" style={{ color: ttsState.yue ? 'var(--success)' : 'var(--text-dim)' }}>
+                  {ttsState.yue ? '✅ 可用' : (ttsState.zh ? '⚠️ 用中文代替' : '❌ 冇語音')}
+                </span>
+              </div>
+              <div className="setting-row">
+                <label>可用語音數</label>
+                <span className="value">{ttsState.voices} 個</span>
+              </div>
+              <div className="setting-row">
+                <label>測試發音</label>
+                <button 
+                  className="action-btn outline"
+                  style={{ padding: '6px 16px', fontSize: '13px', flex: 0 }}
+                  onClick={() => speak('你好，我係粵讀')}
+                >🔊 測試</button>
+              </div>
+              {!ttsState.yue && ttsState.supported && (
+                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px', lineHeight: 1.5 }}>
+                  💡 Android可以去設定 → 輔助功能 → 文字轉語音 → 安裝粵語語音<br />
+                  或喺 Google Play 搜尋「Google 文字轉語音」安裝粵語語言包
+                </div>
+              )}
             </div>
 
             <div className="setting-group">
