@@ -236,11 +236,55 @@ export default function App() {
     checkTTS()
   }, [])
 
+  // Unified audio player that handles Android Chrome restrictions
+  const [audioCtx, setAudioCtx] = useState(null)
+  
+  // Initialize AudioContext on first user interaction
+  const ensureAudio = useCallback(async () => {
+    if (!audioCtx || audioCtx.state === 'closed') {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)()
+      setAudioCtx(ctx)
+      if (ctx.state === 'suspended') await ctx.resume()
+      return ctx
+    }
+    if (audioCtx.state === 'suspended') await audioCtx.resume()
+    return audioCtx
+  }, [audioCtx])
+
+  // Play audio URL with Android Chrome workaround
+  const playAudio = useCallback(async (url) => {
+    // Try direct Audio element first (works on desktop)
+    const audio = new Audio(url)
+    audio.setAttribute('playsinline', '')
+    audio.setAttribute('webkit-playsinline', '')
+    
+    try {
+      await audio.play()
+      return
+    } catch (e) {
+      if (e.name !== 'NotAllowedError') throw e
+    }
+    
+    // Android Chrome workaround: use AudioContext to unlock
+    const ctx = await ensureAudio()
+    // Create a silent buffer to "consume" the user gesture
+    const buffer = ctx.createBuffer(1, 1, 22050)
+    const source = ctx.createBufferSource()
+    source.buffer = buffer
+    source.connect(ctx.destination)
+    source.start(0)
+    
+    // Now try playing again
+    const audio2 = new Audio(url)
+    audio2.setAttribute('playsinline', '')
+    audio2.setAttribute('webkit-playsinline', '')
+    await audio2.play()
+  }, [ensureAudio])
+
   // TTS speak — browser-native Edge TTS via WebSocket (no server needed!)
   // Uses Microsoft Edge's free TTS service directly from the browser
   const speak = async (text) => {
-    // Try Edge TTS via browser WebSocket (works on mobile Chrome, 
-    // uses Microsoft's free service, no API key needed)
+    // Try Edge TTS via browser WebSocket (works on mobile Chrome)
     try {
       await playEdgeTTS(text)
       return
@@ -251,16 +295,14 @@ export default function App() {
     // Fallback: local TTS server
     try {
       const url = `http://${window.location.hostname}:9876/tts?text=${encodeURIComponent(text)}`
-      const audio = new Audio(url)
-      await audio.play()
+      await playAudio(url)
       return
     } catch (e) {}
     
     // Last resort: Google TTS
     try {
       const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=yue&client=tw-ob&ttsspeed=0.9`
-      const audio = new Audio(url)
-      await audio.play()
+      await playAudio(url)
       return
     } catch (e) {}
     
@@ -338,10 +380,13 @@ export default function App() {
                 }
                 const blob = new Blob([combined], { type: 'audio/mpeg' })
                 const url = URL.createObjectURL(blob)
-                const audio = new Audio(url)
-                audio.onended = () => { URL.revokeObjectURL(url); resolve() }
-                audio.onerror = () => reject(new Error('Audio playback failed'))
-                audio.play().catch(reject)
+                playAudio(url).then(() => {
+                  URL.revokeObjectURL(url)
+                  resolve()
+                }).catch(() => {
+                  URL.revokeObjectURL(url)
+                  reject(new Error('Audio playback failed'))
+                })
               } else {
                 reject(new Error('No audio data received'))
               }
