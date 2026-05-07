@@ -236,223 +236,7 @@ export default function App() {
     checkTTS()
   }, [])
 
-  // Unified audio player that handles Android Chrome restrictions
-  const [audioCtx, setAudioCtx] = useState(null)
-  
-  // Initialize AudioContext on first user interaction
-  const ensureAudio = useCallback(async () => {
-    if (!audioCtx || audioCtx.state === 'closed') {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)()
-      setAudioCtx(ctx)
-      if (ctx.state === 'suspended') await ctx.resume()
-      return ctx
-    }
-    if (audioCtx.state === 'suspended') await audioCtx.resume()
-    return audioCtx
-  }, [audioCtx])
 
-  // Play audio URL with Android Chrome workaround
-  const playAudio = useCallback(async (url) => {
-    // Method 1: Create a fresh audio element each time, play immediately on click
-    const audio = new Audio(url)
-    audio.setAttribute('playsinline', '')
-    audio.setAttribute('webkit-playsinline', '')
-    audio.preload = 'auto'
-    
-    try {
-      await audio.play()
-      return
-    } catch (e) {
-      if (e.name !== 'NotAllowedError') throw e
-    }
-    
-    // Method 2: AudioContext unlock trick
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)()
-      await ctx.resume()
-      
-      // Fetch audio as blob and play with AudioContext
-      const resp = await fetch(url)
-      const blob = await resp.blob()
-      const buf = await blob.arrayBuffer()
-      const audioBuf = await ctx.decodeAudioData(buf)
-      
-      const source = ctx.createBufferSource()
-      source.buffer = audioBuf
-      source.connect(ctx.destination)
-      source.start(0)
-      return
-    } catch (e2) {
-      console.log('AudioContext playback failed:', e2)
-    }
-    
-    // Method 3: Use an iframe to bypass restrictions
-    try {
-      const iframe = document.createElement('iframe')
-      iframe.style.display = 'none'
-      iframe.src = url
-      document.body.appendChild(iframe)
-      setTimeout(() => document.body.removeChild(iframe), 5000)
-    } catch (e3) {
-      throw new Error('All playback methods failed')
-    }
-  }, [])
-
-  // TTS speak — browser-native Edge TTS via WebSocket (no server needed!)
-  // Uses Microsoft Edge's free TTS service directly from the browser
-  const speak = async (text) => {
-    // Try Edge TTS via browser WebSocket (works on mobile Chrome)
-    try {
-      await playEdgeTTS(text)
-      return
-    } catch (e) {
-      console.log('Edge TTS WebSocket failed, trying alternatives...', e)
-    }
-    
-    // Fallback: local TTS server
-    try {
-      const url = `http://${window.location.hostname}:9876/tts?text=${encodeURIComponent(text)}`
-      await playAudio(url)
-      return
-    } catch (e) {}
-    
-    // Last resort: Google TTS
-    try {
-      const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=yue&client=tw-ob&ttsspeed=0.9`
-      await playAudio(url)
-      return
-    } catch (e) {}
-    
-    // Absolute last resort: browser native TTS
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel()
-      const u = new SpeechSynthesisUtterance(text)
-      u.lang = 'yue-HK'
-      u.rate = 0.85
-      window.speechSynthesis.speak(u)
-    }
-  }
-
-  // Edge TTS browser-native implementation
-  // Connects directly to Microsoft's Edge TTS WebSocket
-  function playEdgeTTS(text) {
-    return new Promise((resolve, reject) => {
-      try {
-        const token = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
-        const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${token}&ConnectionId=${crypto.randomUUID().replace(/-/g, '')}`
-        
-        const ws = new WebSocket(wsUrl)
-        const audioChunks = []
-        
-        ws.onopen = () => {
-          // Send speech config
-          const config = JSON.stringify({
-            context: {
-              synthesis: {
-                audio: {
-                  metadataoptions: { sentenceBoundaryEnabled: false, wordBoundaryEnabled: false },
-                  outputFormat: 'audio-24khz-48kbitrate-mono-mp3'
-                }
-              }
-            }
-          })
-          ws.send(`X-Timestamp:${new Date().toISOString()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n${config}`)
-          
-          // Send SSML
-          const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-HK'><voice name='zh-HK-HiuMaanNeural'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>${escapeXml(text)}</prosody></voice></speak>`
-          ws.send(`X-RequestId:${crypto.randomUUID().replace(/-/g, '')}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${new Date().toISOString()}Z\r\nPath:ssml\r\n\r\n${ssml}`)
-        }
-        
-        ws.onmessage = (event) => {
-          if (event.data instanceof ArrayBuffer) {
-            // Binary audio data
-            const data = new Uint8Array(event.data)
-            const separator = 'Path:audio\r\n'
-            const sepBytes = new TextEncoder().encode(separator)
-            
-            // Find separator in binary data
-            let idx = -1
-            for (let i = 0; i < data.length - sepBytes.length; i++) {
-              let match = true
-              for (let j = 0; j < sepBytes.length; j++) {
-                if (data[i + j] !== sepBytes[j]) { match = false; break }
-              }
-              if (match) { idx = i + sepBytes.length; break }
-            }
-            
-            if (idx >= 0) {
-              audioChunks.push(data.slice(idx))
-            }
-          } else if (typeof event.data === 'string') {
-            if (event.data.includes('turn.end')) {
-              ws.close()
-              // Play the audio
-              if (audioChunks.length > 0) {
-                const totalLen = audioChunks.reduce((s, c) => s + c.length, 0)
-                const combined = new Uint8Array(totalLen)
-                let offset = 0
-                for (const chunk of audioChunks) {
-                  combined.set(chunk, offset)
-                  offset += chunk.length
-                }
-                const blob = new Blob([combined], { type: 'audio/mpeg' })
-                const url = URL.createObjectURL(blob)
-                // Play with AudioContext for best Android Chrome compatibility
-                const ctx = new (window.AudioContext || window.webkitAudioContext)()
-                ctx.resume().then(() => {
-                  const reader = new FileReader()
-                  reader.onload = () => {
-                    ctx.decodeAudioData(reader.result).then(audioBuf => {
-                      const source = ctx.createBufferSource()
-                      source.buffer = audioBuf
-                      source.connect(ctx.destination)
-                      source.start(0)
-                      source.onended = () => {
-                        URL.revokeObjectURL(url)
-                        ctx.close()
-                        resolve()
-                      }
-                    }).catch(() => {
-                      // Fallback to audio element
-                      new Audio(url).play().then(resolve).catch(reject)
-                      URL.revokeObjectURL(url)
-                    })
-                  }
-                  reader.readAsArrayBuffer(blob)
-                }).catch(reject)
-              } else {
-                reject(new Error('No audio data received'))
-              }
-            }
-          }
-        }
-        
-        ws.onerror = (e) => {
-          reject(new Error('WebSocket connection failed'))
-        }
-        
-        ws.onclose = (e) => {
-          if (audioChunks.length === 0 && e.code !== 1000) {
-            reject(new Error(`WebSocket closed: ${e.code}`))
-          }
-        }
-        
-        // Timeout after 10s
-        setTimeout(() => {
-          if (audioChunks.length === 0) {
-            ws.close()
-            reject(new Error('Edge TTS timeout'))
-          }
-        }, 10000)
-      } catch (e) {
-        reject(e)
-      }
-    })
-  }
-
-  function escapeXml(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-  }
 
   // Change level
   const changeLevel = async (lvl) => {
@@ -768,15 +552,17 @@ export default function App() {
             </div>
 
             <div className="setting-group">
-              <h3>語音提示</h3>
+              <h3>🔊 發音說明</h3>
               <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
                 <label style={{ fontSize: '13px', lineHeight: 1.6 }}>
-                  📢 粵讀使用 Google TTS 提供粵語發音。<br /><br />
-                  ✅ <strong>推薦使用 Chrome 瀏覽器</strong> — 粵語發音最佳<br />
-                  ❌ 部分瀏覽器（如微信內置瀏覽器）可能唔支援<br /><br />
-                  如果用 Chrome 仲係冇聲，試下：<br />
-                  ① 確保網絡可以訪問 Google<br />
-                  ② 或者用美依嘅本地TTS服務器（同Wi-Fi下自動連接）
+                  粵讀使用 <strong>Edge TTS</strong> 提供地道粵語發音 🎤<br /><br />
+                  美依已喺電腦上啟動咗TTS服務器（埠9876）<br />
+                  手機連接同一Wi-Fi即可自動使用 👍<br /><br />
+                  如果冇聲：<br />
+                  ① 確保電腦TTS服務器仲開緊<br />
+                  ② 手機連同一個Wi-Fi<br />
+                  ③ 刷新頁面再試<br /><br />
+                  美依之後會整一個長期運行嘅雲端版～
                 </label>
               </div>
             </div>
