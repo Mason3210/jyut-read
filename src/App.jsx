@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getAllCards, getDueCards, saveCard, importCards, getSetting, saveSetting, getStarredCards } from './db'
+import { getAllCards, saveCard, importCards, getSetting, saveSetting, getStarredCards } from './db'
 import { calcSM2 } from './sm2'
 import jyutDict from './data/jyutping_dict.json'
+import corpusData from './data/corpus.json'
 
 const TABS = [
   { id: 'study', label: '學習', icon: '📖' },
   { id: 'review', label: '複習', icon: '🔄' },
+  { id: 'corpus', label: '語料', icon: '📚' },
   { id: 'star', label: '生詞本', icon: '⭐' },
   { id: 'settings', label: '設置', icon: '⚙️' }
 ]
@@ -24,6 +26,8 @@ export default function App() {
   const [reviewIndex, setReviewIndex] = useState(0)
   const [todayLearned, setTodayLearned] = useState(0)
   const [studiedChars, setStudiedChars] = useState(new Set())
+  const [corpusFilter, setCorpusFilter] = useState('all')
+  const [starredCorpus, setStarredCorpus] = useState([])  // starred corpus items
   const ttsRef = useRef(null)
 
   // Initialize
@@ -66,8 +70,8 @@ export default function App() {
   const pickNextStudyCard = useCallback(() => {
     if (!cards.length) return null
     
-    // Get cards in the current level range
-    const levelMax = Math.min(levelStart + 1, 5)
+    // Get cards in the current level range (rank 1-9900 -> level 1-10)
+    const levelMax = Math.min(levelStart + 1, 10)
     const levelCards = cards.filter(c => c.level >= levelStart && c.level <= levelMax && !c.nextReview)
     
     if (levelCards.length > 0) {
@@ -202,6 +206,16 @@ export default function App() {
   const [ttsState, setTtsState] = useState({ supported: false, yue: false, zh: false, voices: 0 })
   const [ttsLang, setTtsLang] = useState('yue-HK')
 
+  // Speak text using Web Speech API
+  const speak = useCallback((text) => {
+    if (!window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = 'zh-HK'
+    utterance.rate = 0.9
+    window.speechSynthesis.speak(utterance)
+  }, [])
+
   // Check TTS support
   useEffect(() => {
     const checkTTS = () => {
@@ -248,6 +262,23 @@ export default function App() {
   const changeGoal = async (g) => {
     setDailyGoal(g)
     await saveSetting('dailyGoal', g)
+  }
+
+  // Toggle star for corpus item
+  const toggleStarCorpus = (item) => {
+    setStarredCorpus(prev => {
+      const exists = prev.find(i => i.text === item.text)
+      if (exists) {
+        return prev.filter(i => i.text !== item.text)
+      } else {
+        return [...prev, item]
+      }
+    })
+  }
+
+  // Check if corpus item is starred
+  const isCorpusStarred = (item) => {
+    return starredCorpus.some(i => i.text === item.text)
   }
 
   if (!isReady) {
@@ -450,33 +481,115 @@ export default function App() {
           </>
         )}
 
+        {/* CORPUS TAB */}
+        {tab === 'corpus' && (
+          <>
+            <div className="section-title">常用語料</div>
+
+            {/* Filter buttons */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+              {['all', 'phrase', 'word'].map(f => (
+                <button
+                  key={f}
+                  className={`action-btn ${corpusFilter === f ? 'primary' : 'secondary'}`}
+                  style={{ padding: '6px 12px', fontSize: '12px' }}
+                  onClick={() => setCorpusFilter(f)}
+                >
+                  {f === 'all' ? '全部' : f === 'phrase' ? '短句' : '詞語'}
+                </button>
+              ))}
+            </div>
+
+            {/* Corpus list */}
+            <div className="word-list">
+              {corpusData
+                .filter(item => corpusFilter === 'all' || item.type === corpusFilter)
+                .map((item, idx) => (
+                  <div key={idx} className="word-item">
+                    <div style={{ flex: 1 }}>
+                      <div className="char">{item.text}</div>
+                      <div className="jp">{item.jyutping}</div>
+                      {item.translation && (
+                        <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '2px' }}>
+                          {item.translation}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <button
+                        className="action-btn outline"
+                        style={{ padding: '6px 10px', fontSize: '12px' }}
+                        onClick={() => speak(item.text)}
+                      >
+                        🔊
+                      </button>
+                      <button
+                        className="action-btn outline"
+                        style={{ padding: '6px 10px', fontSize: '12px' }}
+                        onClick={() => toggleStarCorpus(item)}
+                      >
+                        {isCorpusStarred(item) ? '⭐' : '☆'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </>
+        )}
+
         {/* STAR TAB */}
         {tab === 'star' && (
           <>
             <div className="section-title">生詞本</div>
+
+            {/* Starred corpus items */}
+            {starredCorpus.length > 0 && (
+              <>
+                <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '8px' }}>語料</div>
+                <div className="word-list">
+                  {starredCorpus.map(item => (
+                    <div key={`corpus-${item.text}`} className="word-item">
+                      <div style={{ flex: 1 }}>
+                        <div className="char">{item.text}</div>
+                        <div className="jp">{item.jyutping}</div>
+                      </div>
+                      <button
+                        className="action-btn outline"
+                        style={{ padding: '6px 10px', fontSize: '12px' }}
+                        onClick={() => speak(item.text)}
+                      >
+                        🔊
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Starred cards */}
             {starredCards.length > 0 ? (
-              <div className="word-list">
-                {starredCards.map(c => (
-                  <div key={c.char} className="word-item" onClick={() => speak(c.char)}>
-                    <div>
-                      <div className="char">{c.char}</div>
-                      <div className="jp">{c.jyutping}</div>
+              <>
+                <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '8px', marginTop: starredCorpus.length > 0 ? '16px' : '0' }}>漢字</div>
+                <div className="word-list">
+                  {starredCards.map(c => (
+                    <div key={c.char} className="word-item" onClick={() => speak(c.char)}>
+                      <div>
+                        <div className="char">{c.char}</div>
+                        <div className="jp">{c.jyutping}</div>
+                      </div>
                     </div>
-                    <div className="meta">
-                      Level {c.level}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
+                  ))}
+                </div>
+              </>
+            ) : starredCorpus.length === 0 ? (
               <div className="study-card">
                 <div style={{ fontSize: '36px', margin: '16px 0' }}>📌</div>
                 <div className="hint">尚未標記任何生詞</div>
                 <div className="hint" style={{ marginTop: '8px' }}>
-                  學習時點擊 ☆ 即可加入生詞本
+                  學習或語料庫中點擊 ☆ 即可加入生詞本
                 </div>
               </div>
-            )}
+            ) : null}
           </>
         )}
 
@@ -521,9 +634,9 @@ export default function App() {
               </div>
 
               <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '8px', lineHeight: 1.6 }}>
-                Lv.1: 最常用1000字 (日常90%)<br />
-                Lv.2: 常用1000字 (日常98%)<br />
-                Lv.3-5: 進階3000字
+                Lv.1-2: 最常用2000字 (日常90%)<br />
+                Lv.3-5: 常用3000字 (日常98%)<br />
+                Lv.6-10: 進階4900字
               </div>
             </div>
 
@@ -548,22 +661,6 @@ export default function App() {
               <div className="setting-row">
                 <label>生詞本</label>
                 <span className="value">{starredCards.length} 個</span>
-              </div>
-            </div>
-
-            <div className="setting-group">
-              <h3>🔊 發音說明</h3>
-              <div className="setting-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px' }}>
-                <label style={{ fontSize: '13px', lineHeight: 1.6 }}>
-                  粵讀使用 <strong>Edge TTS</strong> 提供地道粵語發音 🎤<br /><br />
-                  美依已喺電腦上啟動咗TTS服務器（埠9876）<br />
-                  手機連接同一Wi-Fi即可自動使用 👍<br /><br />
-                  如果冇聲：<br />
-                  ① 確保電腦TTS服務器仲開緊<br />
-                  ② 手機連同一個Wi-Fi<br />
-                  ③ 刷新頁面再試<br /><br />
-                  美依之後會整一個長期運行嘅雲端版～
-                </label>
               </div>
             </div>
 
