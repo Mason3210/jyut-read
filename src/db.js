@@ -107,9 +107,8 @@ export async function getStarredCards() {
   return new Promise((resolve, reject) => {
     const tx = db.transaction('cards', 'readonly')
     const store = tx.objectStore('cards')
-    const index = store.index('starred')
-    const req = index.getAll(true) // true = get only where starred=true
-    req.onsuccess = () => resolve(req.result)
+    const req = store.getAll()
+    req.onsuccess = () => resolve(req.result.filter(c => c.starred === true))
     req.onerror = () => reject(req.error)
   })
 }
