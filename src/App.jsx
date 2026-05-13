@@ -4,6 +4,8 @@ import { calcSM2 } from './sm2'
 import jyutDict from './data/jyutping_dict.json'
 import corpusData from './data/corpus.json'
 
+const TTS_API_URL = import.meta.env.VITE_TTS_API_URL || ''
+
 const TABS = [
   { id: 'study', label: '學習', icon: '📖' },
   { id: 'review', label: '複習', icon: '🔄' },
@@ -203,25 +205,58 @@ export default function App() {
   }
 
   // TTS state
-  const [ttsState, setTtsState] = useState({ supported: false, yue: false, zh: false, voices: 0 })
+  const [ttsState, setTtsState] = useState({ supported: false, yue: false, zh: false, voices: 0, api: Boolean(TTS_API_URL), error: '' })
   const [ttsLang, setTtsLang] = useState('yue-HK')
+  const audioRef = useRef(null)
 
-  // Speak text using Web Speech API
-  const speak = useCallback((text) => {
+  // Speak text using server-side Cantonese TTS when configured, with browser TTS as fallback.
+  const speak = useCallback(async (text) => {
+    if (TTS_API_URL) {
+      try {
+        const response = await fetch(TTS_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text })
+        })
+
+        if (!response.ok) {
+          throw new Error(`TTS API returned ${response.status}`)
+        }
+
+        const blob = await response.blob()
+        const audioUrl = URL.createObjectURL(blob)
+        audioRef.current?.pause()
+        audioRef.current = new Audio(audioUrl)
+        audioRef.current.onended = () => URL.revokeObjectURL(audioUrl)
+        await audioRef.current.play()
+        setTtsState(prev => ({ ...prev, error: '' }))
+        return
+      } catch (err) {
+        console.warn('Cantonese TTS API failed, falling back to browser voice.', err)
+        setTtsState(prev => ({ ...prev, error: '雲端粵語發音暫時不可用，已改用瀏覽器語音。' }))
+      }
+    }
+
     if (!window.speechSynthesis) return
     window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = 'zh-HK'
+    const voices = window.speechSynthesis.getVoices()
+    const voice = voices.find(v => v.lang === 'yue-HK')
+      || voices.find(v => v.lang === 'zh-HK')
+      || voices.find(v => v.lang.startsWith('yue') || v.lang.includes('HK'))
+
+    if (voice) utterance.voice = voice
+    utterance.lang = voice?.lang || ttsLang
     utterance.rate = 0.9
     window.speechSynthesis.speak(utterance)
-  }, [])
+  }, [ttsLang])
 
   // Check TTS support
   useEffect(() => {
     const checkTTS = () => {
       const supported = 'speechSynthesis' in window
       if (!supported) {
-        setTtsState({ supported: false, yue: false, zh: false, voices: 0 })
+        setTtsState(prev => ({ ...prev, supported: false, yue: false, zh: false, voices: 0 }))
         return
       }
       
@@ -229,7 +264,7 @@ export default function App() {
         const voices = speechSynthesis.getVoices()
         const hasYue = voices.some(v => v.lang.startsWith('yue') || v.lang.includes('HK'))
         const hasZh = voices.some(v => v.lang.startsWith('zh'))
-        setTtsState({ supported: true, yue: hasYue, zh: hasZh, voices: voices.length })
+        setTtsState(prev => ({ ...prev, supported: true, yue: hasYue, zh: hasZh, voices: voices.length }))
         
         // Auto-detect best language
         if (hasYue) setTtsLang('yue-HK')
@@ -638,6 +673,24 @@ export default function App() {
                 Lv.3-5: 常用3000字 (日常98%)<br />
                 Lv.6-10: 進階4900字
               </div>
+            </div>
+
+            <div className="setting-group">
+              <h3>發音</h3>
+              <div className="setting-row">
+                <label>粵語雲端發音</label>
+                <span className="value">{ttsState.api ? '已配置' : '未配置'}</span>
+              </div>
+              {!ttsState.api && (
+                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '8px', lineHeight: 1.6 }}>
+                  此裝置如沒有粵語語音，可能會讀成普通話。配置 Vercel TTS API 後可固定使用粵語。
+                </div>
+              )}
+              {ttsState.error && (
+                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '8px', lineHeight: 1.6 }}>
+                  {ttsState.error}
+                </div>
+              )}
             </div>
 
             <div className="setting-group">
