@@ -1,6 +1,10 @@
 const VOICE_NAME = process.env.AZURE_SPEECH_VOICE || 'yue-HK-HiuMaanNeural'
 const OUTPUT_FORMAT = 'audio-16khz-32kbitrate-mono-mp3'
 
+function normalizeRegion(region) {
+  return region.trim().toLowerCase().replace(/\s+/g, '')
+}
+
 function setCorsHeaders(req, res) {
   const allowedOrigin = process.env.ALLOWED_ORIGIN || '*'
   const origin = req.headers.origin
@@ -69,7 +73,8 @@ export default async function handler(req, res) {
   }
 
   const ssml = `<speak version="1.0" xml:lang="yue-HK"><voice xml:lang="yue-HK" name="${VOICE_NAME}">${escapeXml(text)}</voice></speak>`
-  const azureUrl = `https://${speechRegion}.tts.speech.microsoft.com/cognitiveservices/v1`
+  const normalizedRegion = normalizeRegion(speechRegion)
+  const azureUrl = `https://${normalizedRegion}.tts.speech.microsoft.com/cognitiveservices/v1`
 
   let azureResponse
   try {
