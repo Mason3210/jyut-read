@@ -21,6 +21,21 @@ function escapeXml(value) {
     .replace(/'/g, '&apos;')
 }
 
+function getRequestText(body) {
+  if (typeof body?.text === 'string') return body.text.trim()
+
+  if (typeof body === 'string') {
+    try {
+      const parsed = JSON.parse(body)
+      return typeof parsed?.text === 'string' ? parsed.text.trim() : ''
+    } catch {
+      return ''
+    }
+  }
+
+  return ''
+}
+
 export default async function handler(req, res) {
   setCorsHeaders(req, res)
 
@@ -42,7 +57,7 @@ export default async function handler(req, res) {
     return
   }
 
-  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : ''
+  const text = getRequestText(req.body)
   if (!text) {
     res.status(400).json({ error: 'Missing text' })
     return
@@ -56,16 +71,22 @@ export default async function handler(req, res) {
   const ssml = `<speak version="1.0" xml:lang="yue-HK"><voice xml:lang="yue-HK" name="${VOICE_NAME}">${escapeXml(text)}</voice></speak>`
   const azureUrl = `https://${speechRegion}.tts.speech.microsoft.com/cognitiveservices/v1`
 
-  const azureResponse = await fetch(azureUrl, {
-    method: 'POST',
-    headers: {
-      'Ocp-Apim-Subscription-Key': speechKey,
-      'Content-Type': 'application/ssml+xml',
-      'X-Microsoft-OutputFormat': OUTPUT_FORMAT,
-      'User-Agent': 'jyut-read'
-    },
-    body: ssml
-  })
+  let azureResponse
+  try {
+    azureResponse = await fetch(azureUrl, {
+      method: 'POST',
+      headers: {
+        'Ocp-Apim-Subscription-Key': speechKey,
+        'Content-Type': 'application/ssml+xml',
+        'X-Microsoft-OutputFormat': OUTPUT_FORMAT,
+        'User-Agent': 'jyut-read'
+      },
+      body: ssml
+    })
+  } catch (err) {
+    res.status(502).json({ error: 'Azure Speech request failed', details: err.message })
+    return
+  }
 
   if (!azureResponse.ok) {
     const details = await azureResponse.text()
