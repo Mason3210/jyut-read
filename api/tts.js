@@ -1,9 +1,11 @@
-const VOICE_NAME = process.env.AZURE_SPEECH_VOICE || 'yue-HK-HiuMaanNeural'
-const OUTPUT_FORMAT = 'audio-16khz-32kbitrate-mono-mp3'
+import { randomUUID } from 'node:crypto'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { EdgeTTS } from 'node-edge-tts'
 
-function normalizeRegion(region) {
-  return region.trim().toLowerCase().replace(/\s+/g, '')
-}
+const VOICE_NAME = process.env.EDGE_TTS_VOICE || 'zh-HK-HiuMaanNeural'
+const OUTPUT_FORMAT = 'audio-24khz-48kbitrate-mono-mp3'
 
 function setCorsHeaders(req, res) {
   const allowedOrigin = process.env.ALLOWED_ORIGIN || '*'
@@ -14,15 +16,6 @@ function setCorsHeaders(req, res) {
   res.setHeader('Vary', 'Origin')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-}
-
-function escapeXml(value) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
 }
 
 function getRequestText(body) {
@@ -53,14 +46,6 @@ export default async function handler(req, res) {
     return
   }
 
-  const speechKey = process.env.AZURE_SPEECH_KEY
-  const speechRegion = process.env.AZURE_SPEECH_REGION
-
-  if (!speechKey || !speechRegion) {
-    res.status(500).json({ error: 'Azure Speech is not configured' })
-    return
-  }
-
   const text = getRequestText(req.body)
   if (!text) {
     res.status(400).json({ error: 'Missing text' })
@@ -72,35 +57,23 @@ export default async function handler(req, res) {
     return
   }
 
-  const ssml = `<speak version="1.0" xml:lang="yue-HK"><voice xml:lang="yue-HK" name="${VOICE_NAME}">${escapeXml(text)}</voice></speak>`
-  const normalizedRegion = normalizeRegion(speechRegion)
-  const azureUrl = `https://${normalizedRegion}.tts.speech.microsoft.com/cognitiveservices/v1`
-
-  let azureResponse
+  const audioPath = path.join(os.tmpdir(), `jyut-read-${randomUUID()}.mp3`)
   try {
-    azureResponse = await fetch(azureUrl, {
-      method: 'POST',
-      headers: {
-        'Ocp-Apim-Subscription-Key': speechKey,
-        'Content-Type': 'application/ssml+xml',
-        'X-Microsoft-OutputFormat': OUTPUT_FORMAT,
-        'User-Agent': 'jyut-read'
-      },
-      body: ssml
+    const tts = new EdgeTTS({
+      voice: VOICE_NAME,
+      lang: 'zh-HK',
+      outputFormat: OUTPUT_FORMAT,
+      timeout: 20000
     })
+
+    await tts.ttsPromise(text, audioPath)
+    const audio = await fs.readFile(audioPath)
+    res.setHeader('Content-Type', 'audio/mpeg')
+    res.setHeader('Cache-Control', 'public, max-age=86400')
+    res.status(200).send(audio)
   } catch (err) {
-    res.status(502).json({ error: 'Azure Speech request failed', details: err.message })
-    return
+    res.status(502).json({ error: 'Edge TTS request failed', details: err.message })
+  } finally {
+    await fs.rm(audioPath, { force: true }).catch(() => {})
   }
-
-  if (!azureResponse.ok) {
-    const details = await azureResponse.text()
-    res.status(502).json({ error: 'Azure Speech request failed', details })
-    return
-  }
-
-  const audio = Buffer.from(await azureResponse.arrayBuffer())
-  res.setHeader('Content-Type', 'audio/mpeg')
-  res.setHeader('Cache-Control', 'public, max-age=86400')
-  res.status(200).send(audio)
 }
