@@ -81,14 +81,25 @@ export async function importCards(characters) {
   // Initialize cards for new characters (first time setup)
   const existing = await getAllCards()
   const existingChars = new Set(existing.map(c => c.char))
-  
-  for (const ch of characters) {
-    if (!existingChars.has(ch.char)) {
-      await saveCard({
+
+  const newCharacters = characters.filter(ch => !existingChars.has(ch.char))
+  if (newCharacters.length === 0) return
+
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('cards', 'readwrite')
+    const store = tx.objectStore('cards')
+
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error)
+
+    for (const ch of newCharacters) {
+      store.put({
         char: ch.char,
         jyutping: ch.jyutping,
         rank: ch.rank,
-        level: Math.ceil(ch.rank / 1000), // level 1-5 based on rank
+        level: Math.ceil(ch.rank / 1000),
         ease: 2.5,
         interval: 0,
         repetitions: 0,
@@ -99,7 +110,7 @@ export async function importCards(characters) {
         history: []
       })
     }
-  }
+  })
 }
 
 export async function getStarredCards() {

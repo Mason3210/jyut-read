@@ -67,12 +67,12 @@ export default function App() {
   }, [])
 
   // Pick next study card
-  const pickNextStudyCard = useCallback(() => {
-    if (!cards.length) return null
+  const pickNextStudyCard = useCallback((cardList = cards) => {
+    if (!cardList.length) return null
     
     // Get cards in the current level range (rank 1-9900 -> level 1-10)
     const levelMax = Math.min(levelStart + 1, 10)
-    const levelCards = cards.filter(c => c.level >= levelStart && c.level <= levelMax && !c.nextReview)
+    const levelCards = cardList.filter(c => c.level >= levelStart && c.level <= levelMax && !c.nextReview)
     
     if (levelCards.length > 0) {
       // Pick a new card from current level
@@ -81,7 +81,7 @@ export default function App() {
     }
 
     // If no new cards in level, find the one with lowest rank that hasn't been studied
-    const unstudied = cards.filter(c => !c.nextReview).sort((a, b) => a.rank - b.rank)
+    const unstudied = cardList.filter(c => !c.nextReview).sort((a, b) => a.rank - b.rank)
     return unstudied.length > 0 ? unstudied[0] : null
   }, [cards, levelStart])
 
@@ -127,7 +127,7 @@ export default function App() {
     setCards(allCards)
 
     // Pick next
-    const next = pickNextStudyCard()
+    const next = pickNextStudyCard(allCards)
     if (next) {
       setCurrentCard(next)
       setShowJyutping(false)
